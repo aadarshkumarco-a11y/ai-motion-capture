@@ -1,192 +1,114 @@
 /**
- * useMotionCapture
- *
- * React hook that wires together the camera stream, the MediaPipe
- * detection loop and the app's Settings. Returns a ref for the
- * <video> element plus reactive state for tracking output, FPS and
- * errors.
- *
- * Responsibilities:
- *   - Start / stop getUserMedia camera stream
- *   - Initialize the MotionCaptureService (Hand + Pose + Face)
- *   - Run a requestAnimationFrame detection loop with an FPS cap
- *   - Pause the loop when the tab is hidden (visibilitychange)
- *   - Apply detectionConfidence, fpsLimit and cameraResolution live
- *   - Surface human-readable camera permission errors
+ * useMotionCapture — optimized hook
+ * - Runs HANDS every frame (priority for drawing)
+ * - Runs POSE only if settings.showSkeleton
+ * - Runs FACE only if settings.showFaceMesh
+ * - FPS capped at settings.fpsLimit
  */
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motionCapture } from "../services/mediapipe";
 import type { Settings, TrackingResult } from "../types";
 
-const EMPTY_RESULT: TrackingResult = {
-  faceLandmarks: [],
-  poseLandmarks: [],
-  leftHandLandmarks: [],
-  rightHandLandmarks: [],
-  poseWorldLandmarks: [],
+const EMPTY: TrackingResult = {
+  faceLandmarks: [], poseLandmarks: [],
+  leftHandLandmarks: [], rightHandLandmarks: [], poseWorldLandmarks: [],
 };
 
-const RESOLUTIONS: Record<
-  Settings["cameraResolution"],
-  { width: number; height: number }
-> = {
+const RES: Record<string, { width: number; height: number }> = {
   "480p": { width: 640, height: 480 },
   "720p": { width: 1280, height: 720 },
   "1080p": { width: 1920, height: 1080 },
 };
 
-export interface UseMotionCaptureReturn {
-  /** Attach to a <video> element used as the camera source. */
-  videoRef: React.RefObject<HTMLVideoElement | null>;
-  /** Latest normalized tracking result (empty when not tracking). */
-  trackingResult: TrackingResult;
-  /** Recent measured FPS of the detection loop. */
-  fps: number;
-  /** True while the camera + loop are actively running. */
-  isTracking: boolean;
-  /** True once MediaPipe models finished loading at least once. */
-  isReady: boolean;
-  /** Human-readable error string, or null. */
-  error: string | null;
-  /** Request camera access, init MediaPipe and start the loop. */
-  start: () => Promise<void>;
-  /** Stop the loop and release the camera. */
-  stop: () => void;
-}
-
-/**
- * @param settings Live settings object — the hook reads the latest
- *                 values via a ref so changes apply without restarting
- *                 the loop.
- */
-export function useMotionCapture(
-  settings: Settings,
-): UseMotionCaptureReturn {
+export function useMotionCapture(settings: Settings) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const settingsRef = useRef<Settings>(settings);
-
-  const [trackingResult, setTrackingResult] =
-    useState<TrackingResult>(EMPTY_RESULT);
+  const settingsRef = useRef(settings);
+  const [trackingResult, setTrackingResult] = useState<TrackingResult>(EMPTY);
   const [fps, setFps] = useState(0);
   const [isTracking, setIsTracking] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep the latest settings available to the rAF loop without forcing
-  // it to restart on every settings change.
-  useEffect(() => {
-    settingsRef.current = settings;
-    // Live-apply confidence + smoothing without restarting the camera.
-    motionCapture.setConfidence(settings.detectionConfidence);
-  }, [settings]);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
 
-  // ------------------------------------------------------------------
-  // Stop helper (also used as the unmount cleanup)
-  // ------------------------------------------------------------------
   const stop = useCallback(() => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
-    if (videoRef.current) {
-      try {
-        videoRef.current.srcObject = null;
-      } catch {
-        /* ignore */
-      }
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
     setIsTracking(false);
     setFps(0);
-    setTrackingResult(EMPTY_RESULT);
+    setTrackingResult(EMPTY);
   }, []);
 
-  // ------------------------------------------------------------------
-  // Start helper
-  // ------------------------------------------------------------------
   const start = useCallback(async () => {
     setError(null);
 
-    // 1. Init MediaPipe (idempotent — safe to call repeatedly).
+    // 1. Init MediaPipe
     try {
-      await motionCapture.initMotionCapture();
-      motionCapture.setConfidence(settingsRef.current.detectionConfidence);
+      await motionCapture.init();
       setIsReady(true);
     } catch (err) {
-      setError(
-        `Failed to load motion models: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      setError(`Failed to load AI models: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 
-    // 2. Request camera.
+    // 2. Camera
     let stream: MediaStream;
     try {
-      const res = RESOLUTIONS[settingsRef.current.cameraResolution];
+      const r = RES[settingsRef.current.cameraResolution] || RES["720p"];
       stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: res.width },
-          height: { ideal: res.height },
-          facingMode: "user",
-        },
+        video: { width: { ideal: r.width }, height: { ideal: r.height }, facingMode: "user" },
         audio: false,
       });
     } catch (err) {
-      setError(formatCameraError(err));
-      stop();
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("NotAllowed") || msg.includes("denied"))
+        setError("Camera permission denied. Allow camera access and retry.");
+      else if (msg.includes("NotFound"))
+        setError("No camera found. Connect a camera and retry.");
+      else
+        setError(`Camera error: ${msg}`);
       return;
     }
+
     streamRef.current = stream;
 
-    // 3. Attach stream to the <video> element.
+    // 3. Attach to video
     const video = videoRef.current;
     if (!video) {
-      setError("Video element is not mounted.");
-      stop();
+      setError("Video element not found.");
+      stream.getTracks().forEach(t => t.stop());
       return;
     }
+
     video.srcObject = stream;
     video.muted = true;
     video.playsInline = true;
-    try {
-      await video.play();
-    } catch {
-      /* autoplay may be blocked; rely on user gesture */
-    }
 
-    // 4. Flip the isTracking flag, which the rAF effect listens to.
+    try { await video.play(); } catch {}
+
     setIsTracking(true);
   }, [stop]);
 
-  // ------------------------------------------------------------------
-  // Detection loop — driven by isTracking. Re-creates the loop only
-  // when isTracking transitions, not on every render.
-  // ------------------------------------------------------------------
+  // Detection loop
   useEffect(() => {
     if (!isTracking) return;
 
-    let rafId = 0;
-    let lastFrameTime = 0;
-    let lastVideoTs = 0;
-    let frameCount = 0;
-    let lastFpsUpdate = performance.now();
-    let cancelled = false;
-    // Hidden tabs should pause the detection loop but keep the camera
-    // open so a re-focus can resume instantly.
+    let raf = 0;
+    let lastFrame = 0;
+    let lastTs = 0;
+    let frames = 0;
+    let lastFpsTime = performance.now();
     let paused = false;
 
-    const onVisibility = () => {
-      paused = document.hidden;
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    const onVis = () => { paused = document.hidden; };
+    document.addEventListener("visibilitychange", onVis);
 
     const loop = () => {
-      if (cancelled) return;
-      rafId = requestAnimationFrame(loop);
-
+      raf = requestAnimationFrame(loop);
       if (paused) return;
 
       const video = videoRef.current;
@@ -194,85 +116,40 @@ export function useMotionCapture(
 
       const now = performance.now();
       const s = settingsRef.current;
-      const frameInterval = 1000 / Math.max(1, s.fpsLimit);
-      const elapsed = now - lastFrameTime;
-      if (elapsed < frameInterval) return;
-      lastFrameTime = now - (elapsed % frameInterval);
+      const interval = 1000 / Math.max(15, s.fpsLimit);
+      const elapsed = now - lastFrame;
+      if (elapsed < interval) return;
+      lastFrame = now - (elapsed % interval);
 
-      // MediaPipe requires strictly increasing timestamps (ms).
       let ts = Math.floor(video.currentTime * 1000);
-      if (ts <= lastVideoTs) ts = lastVideoTs + 1;
-      lastVideoTs = ts;
+      if (ts <= lastTs) ts = lastTs + 1;
+      lastTs = ts;
 
-      try {
-        const result = motionCapture.detect(video, ts);
-        // `mirror` is honored by the rendering layer (canvas overlay),
-        // not here — landmark coordinates stay in raw video space.
-        setTrackingResult(result);
-      } catch (err) {
-        console.error("[useMotionCapture] detect failed:", err);
-      }
+      // Only run detectors that are enabled (MAJOR perf win)
+      const result = motionCapture.detect(video, ts, {
+        runPose: s.showSkeleton,
+        runFace: s.showFaceMesh,
+      });
+      setTrackingResult(result);
 
-      // FPS sampling (every ~500ms).
-      frameCount += 1;
-      const fpsElapsed = now - lastFpsUpdate;
+      // FPS
+      frames++;
+      const fpsElapsed = now - lastFpsTime;
       if (fpsElapsed >= 500) {
-        setFps(Math.round((frameCount * 1000) / fpsElapsed));
-        frameCount = 0;
-        lastFpsUpdate = now;
+        setFps(Math.round((frames * 1000) / fpsElapsed));
+        frames = 0;
+        lastFpsTime = now;
       }
     };
 
-    rafId = requestAnimationFrame(loop);
-
+    raf = requestAnimationFrame(loop);
     return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-      document.removeEventListener("visibilitychange", onVisibility);
+      cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [isTracking]);
 
-  // ------------------------------------------------------------------
-  // Cleanup on unmount: stop the camera + loop.
-  // ------------------------------------------------------------------
-  useEffect(() => {
-    return () => stop();
-  }, [stop]);
+  useEffect(() => () => stop(), [stop]);
 
-  return {
-    videoRef,
-    trackingResult,
-    fps,
-    isTracking,
-    isReady,
-    error,
-    start,
-    stop,
-  };
-}
-
-/**
- * Maps a getUserMedia / MediaPipe error to a user-friendly message.
- */
-function formatCameraError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  const lower = msg.toLowerCase();
-
-  if (lower.includes("notallowed") || lower.includes("permission") ||
-      lower.includes("denied")) {
-    return "Camera permission denied. Please allow camera access in your browser and try again.";
-  }
-  if (lower.includes("notfound") || lower.includes("devicesnotfound")) {
-    return "No camera was found. Please connect a camera and try again.";
-  }
-  if (lower.includes("notreadable") || lower.includes("trackstart")) {
-    return "Your camera is in use by another application. Close it and try again.";
-  }
-  if (lower.includes("overconstrained") || lower.includes("constraint")) {
-    return "The requested camera resolution is not supported by your device.";
-  }
-  if (lower.includes("notsupported") || lower.includes("secure context")) {
-    return "Camera access requires HTTPS or localhost.";
-  }
-  return `Camera error: ${msg}`;
+  return { videoRef, trackingResult, fps, isTracking, isReady, error, start, stop };
 }
