@@ -13,9 +13,8 @@ import type {
   TrackingResult,
   GestureType,
   BrushType,
-  GestureBinding,
 } from "./types";
-import { DEFAULT_SETTINGS, DEFAULT_GESTURE_BINDINGS } from "./types";
+import { DEFAULT_SETTINGS } from "./types";
 
 const SETTINGS_KEY = "ai-motion-capture:settings";
 
@@ -105,7 +104,10 @@ export default function App() {
               lastGestureTimeRef.current = now;
               setActiveGesture(gesture);
               if (gesture === "pinch" || gesture === "index_up") {
-                if (!isDrawingRef.current) { engine.startStroke({ brushType, color, size: brushSize, opacity }); isDrawingRef.current = true; }
+                if (!isDrawingRef.current) {
+                  engine.startStroke({ x: 0, y: 0, color, size: brushSize, opacity, brushType, timestamp: Date.now() }, { brushType, color, size: brushSize, opacity });
+                  isDrawingRef.current = true;
+                }
               } else if (gesture === "fist" || gesture === "open_palm") {
                 if (isDrawingRef.current) { engine.endStroke(); isDrawingRef.current = false; }
               }
@@ -113,7 +115,9 @@ export default function App() {
           }
           if (isDrawingRef.current && hands.length >= 9) {
             const tip = hands[8];
-            if (tip) { engine.addPoint(tip.x * (drawCanvas?.clientWidth || 0), tip.y * (drawCanvas?.clientHeight || 0)); }
+            if (tip) {
+              engine.addPoint({ x: tip.x * (drawCanvas?.clientWidth || 0), y: tip.y * (drawCanvas?.clientHeight || 0), color, size: brushSize, opacity, brushType, timestamp: Date.now() });
+            }
           }
         } else {
           if (isDrawingRef.current) { engine.endStroke(); isDrawingRef.current = false; }
@@ -131,7 +135,7 @@ export default function App() {
 
   const handleStart = useCallback(async () => {
     setScreen("capture");
-    setTimeout(async () => { if (videoRef.current) await startCapture(videoRef.current); }, 200);
+    setTimeout(async () => { await startCapture(); }, 200);
   }, [startCapture]);
 
   const handleUndo = useCallback(() => drawingEngineRef.current?.undo(), []);
@@ -171,7 +175,15 @@ export default function App() {
           <motion.div key="l" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0"><Landing onStart={handleStart} /></motion.div>
         ) : (
           <motion.div key="c" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
-            <CameraView videoRef={videoRef} skeletonCanvasRef={skeletonCanvasRef} drawingCanvasRef={drawingCanvasRef} onReady={() => {}} settings={settings} onGesture={() => {}} isTracking={isTracking} fps={fps} error={captureError} />
+            <CameraView videoRef={videoRef} skeletonCanvasRef={skeletonCanvasRef} drawingCanvasRef={drawingCanvasRef} onReady={() => {}} settings={settings} onGesture={() => {}} isTracking={isTracking} />
+            {fps > 0 && (
+              <div className="absolute top-3 right-3 px-3 py-1.5 rounded-full glass text-xs font-mono z-20">
+                <span className={fps >= 24 ? "text-green-400" : "text-yellow-400"}>{fps} FPS</span>
+              </div>
+            )}
+            {captureError && (
+              <div className="absolute top-3 left-3 px-3 py-1.5 rounded-full glass text-xs text-red-400 z-20">{captureError}</div>
+            )}
             <SkeletonOverlay canvasRef={skeletonCanvasRef} trackingResult={trackingResult} settings={settings} />
             <Toolbar brushType={brushType} setBrushType={setBrushType} color={color} setColor={setColor} brushSize={brushSize} setBrushSize={setBrushSize} opacity={opacity} setOpacity={setOpacity} onUndo={handleUndo} onRedo={handleRedo} onClear={handleClear} onScreenshot={handleScreenshot} isRecording={isRecording} onToggleRecording={handleToggleRecording} onOpenSettings={() => setSettingsOpen(true)} />
             {activeGesture !== "none" && (
