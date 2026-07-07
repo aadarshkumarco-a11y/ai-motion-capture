@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; background: #0a0a0f; color: #fff; font-family: system-ui, sans-serif; overflow: hidden; overscroll-behavior: none; }
+::-webkit-scrollbar { width: 0; }
+
+@keyframes gradient-shift { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+.animated-gradient { background: linear-gradient(-45deg, #0a0a0f, #13131f, #1a0a2e, #0a1620); background-size: 400% 400%; animation: gradient-shift 12s ease infinite; }
+
+@keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.float-anim { animation: float 4s ease-in-out infinite; }
+
+.glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); }
+.glass-strong { background: rgba(255,255,255,0.08); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.12); }
+
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(124,58,237,0.4); } 70% { box-shadow: 0 0 0 12px rgba(124,58,237,0); } 100% { box-shadow: 0 0 0 0 rgba(124,58,237,0); } }
+.pulse-ring { animation: pulse-ring 2s infinite; }
+
+.neon-text { text-shadow: 0 0 10px rgba(124,58,237,0.6), 0 0 20px rgba(124,58,237,0.4); }
+.neon-border { box-shadow: 0 0 8px rgba(124,58,237,0.3), inset 0 0 8px rgba(124,58,237,0.1); }
+
+input[type="range"] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.15); outline: none; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #7c3aed; cursor: pointer; box-shadow: 0 0 8px rgba(124,58,237,0.5); }
